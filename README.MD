@@ -136,6 +136,7 @@ pip install pymupdf
 - **Gemma 3 12B**: Google's vision-language model that provides detailed descriptions and good structure recognition
 - **Llama 3.2 Vision**: Meta's vision model that excels at recognizing visual content and following detailed instructions
 - **Granite 3.2 Vision**: A smaller 2B parameter model that works well on systems with limited RAM while still providing reasonable analysis
+- **Unsloth_gemma3-12b-it**: A custom model that uses the Gemma 3 12B model optimized by Unsloth 
 
 Choose the appropriate model based on your specific needs and hardware constraints.
 
