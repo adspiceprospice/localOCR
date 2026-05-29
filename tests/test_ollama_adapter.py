@@ -173,6 +173,34 @@ def test_query_ollama_forwards_schema_dict_format():
     assert client.chat.call_args.kwargs["format"] is schema
 
 
+def test_query_ollama_stream_uses_shared_messages_and_timeout():
+    client = Mock()
+    client.chat.return_value = [
+        {"message": {"content": "hello"}},
+        {"message": {"content": ""}},
+        {"message": {"content": " world"}},
+    ]
+
+    with patch.object(adapter.ollama, "Client", return_value=client) as client_factory:
+        chunks = list(
+            adapter.query_ollama_stream(
+                "prompt",
+                "img",
+                "gemma4:latest",
+                system_prompt="system",
+                timeout=2.0,
+            )
+        )
+
+    assert chunks == ["hello", " world"]
+    client_factory.assert_called_once_with(timeout=2.0)
+    assert client.chat.call_args.kwargs["messages"] == [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "prompt", "images": ["img"]},
+    ]
+    assert client.chat.call_args.kwargs["stream"] is True
+
+
 def test_substring_no_longer_matches():
     """Regression: 'gemma4' should NOT match 'gemma4:26b' without explicit tag."""
     with patch.object(adapter.ollama, "show", side_effect=Exception("no")):

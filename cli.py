@@ -162,19 +162,20 @@ def _process_file(
                 _, _, img = first_entry
                 _handle_page(img, filename)
         else:
-            image = Image.open(path)
-            result, content, structured_data = process_image(
-                image,
-                filename,
-                fields,
-                model=model,
-                system_prompt=system_prompt,
-                options=options,
-                max_image_size=max_image_size,
-                jpeg_quality=jpeg_quality,
-                inference=inference,
-                prompts=prompts,
-            )
+            with Image.open(path) as image:
+                image.load()
+                result, content, structured_data = process_image(
+                    image,
+                    filename,
+                    fields,
+                    model=model,
+                    system_prompt=system_prompt,
+                    options=options,
+                    max_image_size=max_image_size,
+                    jpeg_quality=jpeg_quality,
+                    inference=inference,
+                    prompts=prompts,
+                )
             results.append(result)
             if structured_data and len(structured_data) > 1:
                 structured.append(structured_data)
@@ -186,6 +187,27 @@ def _process_file(
         _log.exception("cli_file_failed", extra={"path": path})
         results.append({"filename": filename, "description": f"Error: {e}"})
     return results, structured
+
+
+def _json_summary_payload(
+    results: List[Result], processed_files: int
+) -> Dict[str, object]:
+    return {
+        "ok": not any(r.error for r in results),
+        "processed_files": processed_files,
+        "total_results": len(results),
+        "results": [
+            {
+                "source": r.source,
+                "mode": r.mode,
+                "text": r.text,
+                "fields": r.fields,
+                "error": r.error,
+                "latency_ms": r.latency_ms,
+            }
+            for r in results
+        ],
+    }
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -348,23 +370,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         write_evidence(all_results, args.out_evidence)
         wrote.append(args.out_evidence)
     if args.json:
-        payload = {
-            "ok": not any(r.error for r in all_results),
-            "processed_files": len(args.files),
-            "total_results": len(all_results),
-            "results": [
-                {
-                    "source": r.source,
-                    "mode": r.mode,
-                    "text": r.text,
-                    "fields": r.fields,
-                    "error": r.error,
-                    "latency_ms": r.latency_ms,
-                }
-                for r in all_results
-            ],
-        }
-        print(json.dumps(payload, ensure_ascii=False))
+        print(
+            json.dumps(
+                _json_summary_payload(all_results, processed_files=len(args.files)),
+                ensure_ascii=False,
+            )
+        )
     elif not args.quiet:
         print("Wrote: " + ", ".join(wrote))
 

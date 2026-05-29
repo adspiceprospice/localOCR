@@ -149,6 +149,29 @@ def _count_items(uploaded_files, pdf_process_mode: str) -> int:
     return total
 
 
+def _display_entry_from_result(result: Result) -> Dict[str, Any]:
+    return {
+        "filename": result.source,
+        "content": result.text if not result.error else "",
+        "duration_sec": (
+            round(result.latency_ms / 1000.0, 3) if result.latency_ms else None
+        ),
+        "dimensions": result.dimensions,
+        "encoded_bytes": result.encoded_bytes,
+        "structured_data": (
+            {"filename": result.source, **result.fields} if result.fields else None
+        ),
+        "image_bytes": result.preview_image_bytes,
+        "page_note": None,
+        "status": "error" if result.error else "done",
+        "error": result.error,
+        "engine": result.engine,
+        "profile_id": result.profile_id,
+        "backend_note": result.backend_note,
+        "field_evidence": result.field_evidence,
+    }
+
+
 def run_processing(state: SidebarState, results_placeholder) -> None:
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -206,9 +229,9 @@ def run_processing(state: SidebarState, results_placeholder) -> None:
                 continue
             job = BatchJob(source=uf.name, data=file_bytes, kind="pdf")
         else:
-            img = Image.open(uf)
-            img.load()
-            job = BatchJob(source=uf.name, data=img, kind="image")
+            with Image.open(uf) as img:
+                img.load()
+                job = BatchJob(source=uf.name, data=img.copy(), kind="image")
 
         for result in _run_batch([job], cfg):
             status_text.text(f"Processing {result.source}")
@@ -216,23 +239,7 @@ def run_processing(state: SidebarState, results_placeholder) -> None:
             if result.latency_ms:
                 durations.append(result.latency_ms / 1000.0)
 
-            entry: Dict[str, Any] = {
-                "filename": result.source,
-                "content": result.text if not result.error else "",
-                "duration_sec": round(result.latency_ms / 1000.0, 3) if result.latency_ms else None,
-                "dimensions": result.dimensions,
-                "encoded_bytes": result.encoded_bytes,
-                "structured_data": ({"filename": result.source, **result.fields} if result.fields else None),
-                "image_bytes": result.preview_image_bytes,
-                "page_note": None,
-                "status": "error" if result.error else "done",
-                "error": result.error,
-                "engine": result.engine,
-                "profile_id": result.profile_id,
-                "backend_note": result.backend_note,
-                "field_evidence": result.field_evidence,
-            }
-            entries.append(entry)
+            entries.append(_display_entry_from_result(result))
             render_results(results_placeholder, entries, state.show_images, state.compact_view)
 
             processed += 1
