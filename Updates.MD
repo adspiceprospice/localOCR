@@ -1,3 +1,10 @@
+## 2026-05-29
+
+- Simplified `core.pipeline` PDF page handling, Ollama field/evidence construction, and auto-backend fallback routing with small internal helpers while preserving the existing PDF tuple and fallback semantics.
+- Consolidated Ollama chat message/kwargs/content handling across image, text, and stream requests, with a stream regression covering shared system/image message construction and timeout usage.
+- Moved Streamlit display-entry shaping into a pure helper, closed loaded image handles in app/legacy CLI paths, and kept the CLI JSON summary schema behind a deterministic helper.
+- Verified the refactors with focused pipeline, Ollama adapter, app, CLI, and lint checks before the full regression run.
+
 ## 2026-05-04
 
 - Kept the GitHub Actions evaluation job as a live Ollama-backed gate, with a readiness loop, a longer request timeout, and a job timeout so hosted-runner startup and inference delays are handled explicitly.

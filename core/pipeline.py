@@ -34,7 +34,7 @@ from core.image_utils import (
 )
 from core.json_extract import extract_structured_data
 from core.logging import get_logger
-from core.models import Mode, Result
+from core.models import FieldEvidence, Mode, Result
 from core.ocr_backends import (
     BACKEND_AUTO,
     BACKEND_DOCLING,
@@ -241,6 +241,39 @@ def process_pdf(
     preprocess: str = "none",
 ) -> Generator[PDFPageResult, None, None]:
     """Process a PDF file using PyMuPDF, yielding page-level results."""
+
+    def _process_page(
+        page_num: int,
+        page_count: int,
+        image: Image.Image,
+        page_filename: str,
+    ) -> PDFPageResult:
+        result, content, structured_data = process_image(
+            image,
+            page_filename,
+            fields,
+            model=model,
+            system_prompt=system_prompt,
+            options=options,
+            max_image_size=max_image_size,
+            jpeg_quality=jpeg_quality,
+            inference=inference,
+            prompts=prompts,
+            settings=settings,
+            preprocess=preprocess,
+        )
+        return (
+            page_num,
+            page_count,
+            image,
+            page_filename,
+            content,
+            structured_data,
+            _number_as_float(result.get("duration_sec")),
+            _dimensions_from_result(result),
+            _int_value(result.get("encoded_bytes")),
+        )
+
     try:
         ensure_pdf_support()
         if process_pages_separately:
@@ -248,67 +281,13 @@ def process_pdf(
                 file_bytes, scale=pdf_scale
             ):
                 page_filename = f"{filename} (Page {page_num + 1})"
-                result, content, structured_data = process_image(
-                    img,
-                    page_filename,
-                    fields,
-                    model=model,
-                    system_prompt=system_prompt,
-                    options=options,
-                    max_image_size=max_image_size,
-                    jpeg_quality=jpeg_quality,
-                    inference=inference,
-                    prompts=prompts,
-                    settings=settings,
-                    preprocess=preprocess,
-                )
-                elapsed = _number_as_float(result.get("duration_sec"))
-                dims = _dimensions_from_result(result)
-                size_bytes = _int_value(result.get("encoded_bytes"))
-                yield (
-                    page_num,
-                    page_count,
-                    img,
-                    page_filename,
-                    content,
-                    structured_data,
-                    elapsed,
-                    dims,
-                    size_bytes,
-                )
+                yield _process_page(page_num, page_count, img, page_filename)
         else:
             first = next(iter_pdf_pages(file_bytes, scale=pdf_scale), None)
             if first is None:
                 raise PDFError("PDF contains no renderable pages.")
-            page_num, page_count, img = first
-            result, content, structured_data = process_image(
-                img,
-                filename,
-                fields,
-                model=model,
-                system_prompt=system_prompt,
-                options=options,
-                max_image_size=max_image_size,
-                jpeg_quality=jpeg_quality,
-                inference=inference,
-                prompts=prompts,
-                settings=settings,
-                preprocess=preprocess,
-            )
-            elapsed = _number_as_float(result.get("duration_sec"))
-            dims = _dimensions_from_result(result)
-            size_bytes = _int_value(result.get("encoded_bytes"))
-            yield (
-                0,
-                page_count,
-                img,
-                filename,
-                content,
-                structured_data,
-                elapsed,
-                dims,
-                size_bytes,
-            )
+            _page_num, page_count, img = first
+            yield _process_page(0, page_count, img, filename)
     except PDFNotSupportedError as e:
         yield None, None, None, filename, str(e), None, None, None, None
     except Exception as e:
@@ -392,6 +371,34 @@ def _preprocess_steps(result: JSONDict) -> List[str]:
     if isinstance(steps, list) and all(isinstance(step, str) for step in steps):
         return list(steps)
     return []
+
+
+def _fields_and_evidence(
+    *,
+    requested_fields: Optional[List[str]],
+    structured: Optional[JSONDict],
+    raw_content: str,
+    engine: str,
+    page: Optional[int] = None,
+) -> tuple[JSONDict, dict[str, FieldEvidence]]:
+    clean_fields: JSONDict = {}
+    if structured:
+        parsed_fields = {k: v for k, v in structured.items() if k != "filename"}
+        clean_fields = clean_result_fields(
+            requested_fields=requested_fields,
+            parsed_fields=parsed_fields,
+        )
+
+    field_evidence: dict[str, FieldEvidence] = {}
+    if requested_fields:
+        field_evidence = build_field_evidence(
+            requested_fields=requested_fields,
+            parsed_fields=clean_fields,
+            raw_content=raw_content,
+            engine=engine,
+            page=page,
+        )
+    return clean_fields, field_evidence
 
 
 def _expected_preprocess_steps(preprocess: str) -> List[str]:
@@ -588,22 +595,13 @@ def _run_ollama_job(
                     **_result_metadata(selection),
                 )
                 continue
-            clean_fields = {}
-            if structured:
-                parsed_fields = {k: v for k, v in structured.items() if k != "filename"}
-                clean_fields = clean_result_fields(
-                    requested_fields=cfg.fields,
-                    parsed_fields=parsed_fields,
-                )
-            field_evidence = {}
-            if cfg.fields:
-                field_evidence = build_field_evidence(
-                    requested_fields=cfg.fields,
-                    parsed_fields=clean_fields,
-                    raw_content=content,
-                    engine=selection.backend,
-                    page=page_num,
-                )
+            clean_fields, field_evidence = _fields_and_evidence(
+                requested_fields=cfg.fields,
+                structured=structured,
+                raw_content=content,
+                engine=selection.backend,
+                page=page_num,
+            )
             yield Result(
                 source=page_filename,
                 mode=mode,
@@ -638,21 +636,12 @@ def _run_ollama_job(
             settings=cfg.settings,
             preprocess=selection.preprocess,
         )
-        clean_fields = {}
-        if structured:
-            parsed_fields = {k: v for k, v in structured.items() if k != "filename"}
-            clean_fields = clean_result_fields(
-                requested_fields=cfg.fields,
-                parsed_fields=parsed_fields,
-            )
-        field_evidence = {}
-        if cfg.fields:
-            field_evidence = build_field_evidence(
-                requested_fields=cfg.fields,
-                parsed_fields=clean_fields,
-                raw_content=content,
-                engine=selection.backend,
-            )
+        clean_fields, field_evidence = _fields_and_evidence(
+            requested_fields=cfg.fields,
+            structured=structured,
+            raw_content=content,
+            engine=selection.backend,
+        )
         elapsed_sec = _number_as_float(result.get("duration_sec")) or 0.0
         dims_t = _dimensions_from_result(result)
         encoded_bytes = _int_value(result.get("encoded_bytes"))
@@ -776,6 +765,59 @@ def _run_hybrid_job_results(
         )
 
 
+def _run_auto_job(
+    *,
+    job: BatchJob,
+    cfg: BatchConfig,
+    mode: Mode,
+    selection: BackendSelection,
+) -> Iterator[Result]:
+    fallback_note: Optional[str] = None
+    if job.kind == "pdf":
+        try:
+            if cfg.fields:
+                docling_results = list(
+                    _run_hybrid_job_results(
+                        job=job,
+                        cfg=cfg,
+                        mode=mode,
+                        selection=selection,
+                    )
+                )
+            else:
+                docling_results = list(
+                    _run_docling_job_results(
+                        job=job,
+                        cfg=cfg,
+                        selection=selection,
+                        engine=BACKEND_DOCLING,
+                    )
+                )
+            yield from docling_results
+            return
+        except Exception as docling_error:
+            fallback_note = f"auto fallback from docling: {docling_error}"
+            _log.info(
+                "auto_docling_fallback",
+                extra={"source": job.source, "err": str(docling_error)},
+            )
+
+    ollama_selection = BackendSelection(
+        backend=BACKEND_OLLAMA,
+        profile_id=selection.profile_id,
+        preprocess=selection.preprocess,
+    )
+    for result in _run_ollama_job(
+        job=job,
+        cfg=cfg,
+        mode=mode,
+        selection=ollama_selection,
+    ):
+        if fallback_note is not None:
+            result.backend_note = fallback_note
+        yield result
+
+
 def run_batch(
     jobs: Iterable[Union[BatchJob, str]],
     cfg: BatchConfig,
@@ -826,49 +868,12 @@ def run_batch(
                 continue
 
             if selection.backend == BACKEND_AUTO:
-                fallback_note: Optional[str] = None
-                if job.kind == "pdf":
-                    try:
-                        if cfg.fields:
-                            docling_results = list(
-                                _run_hybrid_job_results(
-                                    job=job,
-                                    cfg=cfg,
-                                    mode=mode,
-                                    selection=selection,
-                                )
-                            )
-                        else:
-                            docling_results = list(
-                                _run_docling_job_results(
-                                    job=job,
-                                    cfg=cfg,
-                                    selection=selection,
-                                    engine=BACKEND_DOCLING,
-                                )
-                            )
-                        yield from docling_results
-                        continue
-                    except Exception as docling_error:
-                        fallback_note = f"auto fallback from docling: {docling_error}"
-                        _log.info(
-                            "auto_docling_fallback",
-                            extra={"source": job.source, "err": str(docling_error)},
-                        )
-                ollama_selection = BackendSelection(
-                    backend=BACKEND_OLLAMA,
-                    profile_id=selection.profile_id,
-                    preprocess=selection.preprocess,
-                )
-                for result in _run_ollama_job(
+                yield from _run_auto_job(
                     job=job,
                     cfg=cfg,
                     mode=mode,
-                    selection=ollama_selection,
-                ):
-                    if fallback_note is not None:
-                        result.backend_note = fallback_note
-                    yield result
+                    selection=selection,
+                )
                 continue
 
             yield from _run_ollama_job(

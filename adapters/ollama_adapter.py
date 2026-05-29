@@ -203,6 +203,69 @@ def get_available_models(
     return ordered or defaults
 
 
+def _messages(
+    prompt: str,
+    *,
+    system_prompt: Optional[str] = None,
+    image_base64: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    user_message: Dict[str, Any] = {"role": "user", "content": prompt}
+    if image_base64 is not None:
+        user_message["images"] = [image_base64]
+    messages.append(user_message)
+    return messages
+
+
+def _chat_kwargs(
+    *,
+    model: str,
+    messages: List[Dict[str, Any]],
+    options: Optional[dict],
+    format: Optional[OllamaFormat] = None,
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "options": options or {},
+    }
+    if format is not None:
+        kwargs["format"] = format
+    return kwargs
+
+
+def _chat_content(
+    *,
+    model: str,
+    messages: List[Dict[str, Any]],
+    options: Optional[dict],
+    format: Optional[OllamaFormat],
+    settings: Optional[Settings],
+    timeout: Optional[float],
+) -> str:
+    kwargs = _chat_kwargs(
+        model=model,
+        messages=messages,
+        options=options,
+        format=format,
+    )
+
+    try:
+        response = _ollama_api(
+            _request_timeout(settings=settings, timeout=timeout)
+        ).chat(**kwargs)
+        content = response.get("message", {}).get("content", "")
+        if not isinstance(content, str):
+            raise ModelUnavailable("Unexpected response content type from model")
+        return content
+    except ModelUnavailable:
+        raise
+    except Exception as e:
+        raise ModelUnavailable(f"Ollama chat failed: {e}") from e
+
+
 def query_ollama(
     prompt: str,
     image_base64: str,
@@ -215,25 +278,18 @@ def query_ollama(
     timeout: Optional[float] = None,
 ) -> str:
     """Query Ollama chat with an image, returning content string."""
-    messages: List[Dict[str, Any]] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt, "images": [image_base64]})
-
-    try:
-        kwargs: Dict[str, Any] = {"model": model, "messages": messages, "options": options or {}}
-        if format is not None:
-            kwargs["format"] = format
-
-        response = _ollama_api(_request_timeout(settings=settings, timeout=timeout)).chat(**kwargs)
-        content = response.get("message", {}).get("content", "")
-        if not isinstance(content, str):
-            raise ModelUnavailable("Unexpected response content type from model")
-        return content
-    except ModelUnavailable:
-        raise
-    except Exception as e:
-        raise ModelUnavailable(f"Ollama chat failed: {e}") from e
+    return _chat_content(
+        model=model,
+        messages=_messages(
+            prompt,
+            system_prompt=system_prompt,
+            image_base64=image_base64,
+        ),
+        options=options,
+        format=format,
+        settings=settings,
+        timeout=timeout,
+    )
 
 
 def query_ollama_text(
@@ -247,25 +303,14 @@ def query_ollama_text(
     timeout: Optional[float] = None,
 ) -> str:
     """Query Ollama chat with text only, returning content string."""
-    messages: List[Dict[str, Any]] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
-
-    try:
-        kwargs: Dict[str, Any] = {"model": model, "messages": messages, "options": options or {}}
-        if format is not None:
-            kwargs["format"] = format
-
-        response = _ollama_api(_request_timeout(settings=settings, timeout=timeout)).chat(**kwargs)
-        content = response.get("message", {}).get("content", "")
-        if not isinstance(content, str):
-            raise ModelUnavailable("Unexpected response content type from model")
-        return content
-    except ModelUnavailable:
-        raise
-    except Exception as e:
-        raise ModelUnavailable(f"Ollama chat failed: {e}") from e
+    return _chat_content(
+        model=model,
+        messages=_messages(prompt, system_prompt=system_prompt),
+        options=options,
+        format=format,
+        settings=settings,
+        timeout=timeout,
+    )
 
 
 def query_ollama_stream(
@@ -279,16 +324,15 @@ def query_ollama_stream(
     timeout: Optional[float] = None,
 ) -> Iterator[str]:
     """Yield content chunks from Ollama's streaming chat API."""
-    messages: List[Dict[str, Any]] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt, "images": [image_base64]})
-
     try:
         api = _ollama_api(_request_timeout(settings=settings, timeout=timeout))
         for chunk in api.chat(
             model=model,
-            messages=messages,
+            messages=_messages(
+                prompt,
+                system_prompt=system_prompt,
+                image_base64=image_base64,
+            ),
             options=options or {},
             stream=True,
         ):

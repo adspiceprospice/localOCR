@@ -80,6 +80,43 @@ def test_brand_bar_style_targets_streamlit_header():
     assert 'content: "Curiosity AI"' not in style
 
 
+def test_display_entry_from_result_preserves_render_metadata():
+    evidence = {"total": FieldEvidence(value="42", evidence_text="Total 42")}
+    entry = app._display_entry_from_result(
+        Result(
+            source="scan.png",
+            mode="extract",
+            text='{"total": "42"}',
+            fields={"total": "42"},
+            latency_ms=1234,
+            dimensions=(640, 480),
+            encoded_bytes=2048,
+            preview_image_bytes=b"preview",
+            engine="hybrid",
+            profile_id="invoice",
+            backend_note="auto fallback",
+            field_evidence=evidence,
+        )
+    )
+
+    assert entry == {
+        "filename": "scan.png",
+        "content": '{"total": "42"}',
+        "duration_sec": 1.234,
+        "dimensions": (640, 480),
+        "encoded_bytes": 2048,
+        "structured_data": {"filename": "scan.png", "total": "42"},
+        "image_bytes": b"preview",
+        "page_note": None,
+        "status": "done",
+        "error": None,
+        "engine": "hybrid",
+        "profile_id": "invoice",
+        "backend_note": "auto fallback",
+        "field_evidence": evidence,
+    }
+
+
 def test_run_processing_skips_ollama_preflight_for_docling_and_routes_config(monkeypatch):
     fake_st = _FakeStreamlit()
     captured = {}
